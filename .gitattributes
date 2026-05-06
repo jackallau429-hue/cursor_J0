@@ -1,0 +1,23 @@
+# Normalize line endings across Windows + Mac collaborators
+* text=auto eol=lf
+
+# Force CRLF for Windows-only scripts
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Force LF for Unix scripts
+*.sh    text eol=lf
+
+# Treat as binary (no line ending changes)
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.mp4   binary
+*.mov   binary
+*.mp3   binary
+*.wav   binary
+*.xlsx  binary
+*.pdf   binary

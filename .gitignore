@@ -1,0 +1,62 @@
+# ============================================================
+# Workspace .gitignore
+# Strategy: ignore everything at root by default, only sync
+# the youtube-cat-channel/ project folder + a few infra files.
+# This keeps Azure work files / local artifacts OFF GitHub.
+# ============================================================
+
+# Ignore everything at the workspace root
+/*
+
+# But sync these (root-level)
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/youtube-cat-channel/
+
+# ============================================================
+# Inside youtube-cat-channel/, ignore common junk
+# ============================================================
+
+# Python
+youtube-cat-channel/**/__pycache__/
+youtube-cat-channel/**/*.pyc
+youtube-cat-channel/**/.venv/
+youtube-cat-channel/**/venv/
+youtube-cat-channel/**/.env
+youtube-cat-channel/**/.env.*
+!youtube-cat-channel/**/.env.example
+
+# Node
+youtube-cat-channel/**/node_modules/
+youtube-cat-channel/**/dist/
+youtube-cat-channel/**/build/
+
+# Media (too big for git; store externally)
+youtube-cat-channel/**/*.mp4
+youtube-cat-channel/**/*.mov
+youtube-cat-channel/**/*.avi
+youtube-cat-channel/**/*.mp3
+youtube-cat-channel/**/*.wav
+youtube-cat-channel/**/*.png
+youtube-cat-channel/**/*.jpg
+youtube-cat-channel/**/*.jpeg
+youtube-cat-channel/**/*.psd
+youtube-cat-channel/**/raw-footage/
+youtube-cat-channel/**/exports/
+
+# Local data caches / API outputs
+youtube-cat-channel/**/data/cache/
+youtube-cat-channel/**/data/*.json
+!youtube-cat-channel/**/data/*.example.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
