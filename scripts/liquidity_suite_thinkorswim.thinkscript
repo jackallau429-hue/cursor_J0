@@ -1,11 +1,14 @@
 # Liquidity sweep · Anchored VWAP · Volume profile POC (24 bins) · Delta proxy
 # Thinkorswim: Studies → Create → paste → Save
 #
+# If you still see nothing: (1) Study gear → ensure plots are enabled.
+# (2) Turn on "Show debug HL2" — you should see a magenta line; if not, study is not on price pane.
+#
 # Limits:
 # - Not one script for both platforms — TradingView uses the .pine file in this folder.
 # - No real order-book order flow in ToS; cumDV is a candle-direction volume proxy only.
 # - Volume profile here is a binned POC line (24 bins) over vpLength; for full profile use chart Volume Profile.
-# - VWAP: CALENDAR_DATE only starts if that calendar day exists in loaded history; otherwise use FIRST_DATA_BAR.
+# - VWAP: CALENDAR_DATE only starts if that calendar day exists in loaded history.
 
 declare upper;
 
@@ -19,11 +22,14 @@ input showSweepBubble = yes;
 input vpLength = 120;
 input showVpPoc = yes;
 input showDeltaPlot = no;
+input showDebugHl2 = yes;
 
 def ymd = anchorYear * 10000 + anchorMonth * 100 + anchorDay;
 def isAnchorDay = GetYYYYMMDD() == ymd;
 def firstCalendarAnchor = isAnchorDay and !isAnchorDay[1];
-def firstBarAnchor = BarNumber() == 1;
+# First loaded bar of the series (BarNumber()==1 is unreliable on some aggregations)
+def firstBarAnchor = IsNaN(close[1]);
+
 def firstAnchorBar =
     if vwapAnchorMode == vwapAnchorMode.FIRST_DATA_BAR then firstBarAnchor
     else firstCalendarAnchor;
@@ -37,21 +43,27 @@ plot avwapLine = avwap;
 avwapLine.SetDefaultColor(Color.ORANGE);
 avwapLine.SetLineWeight(3);
 
+plot debugHl2 = if showDebugHl2 then hl2 else Double.NaN;
+debugHl2.SetDefaultColor(Color.MAGENTA);
+debugHl2.SetLineWeight(2);
+
 AddLabel(
     yes,
     if vwapAnchorMode == vwapAnchorMode.FIRST_DATA_BAR then "VWAP: first loaded bar"
     else if trackFromAnchor then "VWAP: calendar anchor OK"
-    else "VWAP: calendar day not in range — widen chart or use FIRST_DATA_BAR",
+    else "VWAP: calendar day not in range — widen chart or FIRST_DATA_BAR",
     if vwapAnchorMode == vwapAnchorMode.CALENDAR_DATE and !trackFromAnchor then Color.RED
     else Color.DARK_GRAY
 );
 
-# Pivots: swing at bar pivotRight (confirmed on current bar)
-def swingHighPivot = fold j = 0 to pivotRight + pivotLeft with cond = yes do
-    cond and (j == pivotRight or high[pivotRight] >= high[j]);
+# Pivots: need enough history so high[pivotRight] exists
+def pivotReady = BarNumber() > (pivotLeft + pivotRight + 2) and !IsNaN(high[pivotRight]);
 
-def swingLowPivot = fold j = 0 to pivotRight + pivotLeft with cond = yes do
-    cond and (j == pivotRight or low[pivotRight] <= low[j]);
+def swingHighPivot = pivotReady and (fold j = 0 to pivotRight + pivotLeft with cond = yes do
+    cond and (j == pivotRight or (!IsNaN(high[j]) and high[pivotRight] >= high[j])));
+
+def swingLowPivot = pivotReady and (fold j = 0 to pivotRight + pivotLeft with cond = yes do
+    cond and (j == pivotRight or (!IsNaN(low[j]) and low[pivotRight] <= low[j])));
 
 def ph = if swingHighPivot then high[pivotRight] else Double.NaN;
 def pl = if swingLowPivot then low[pivotRight] else Double.NaN;
@@ -75,37 +87,38 @@ bearMark.SetLineWeight(3);
 AddChartBubble(showSweepBubble and bullSweep, low, "Liq sweep", Color.CYAN, no);
 AddChartBubble(showSweepBubble and bearSweep, high, "Liq sweep", Color.RED, yes);
 
-# --- Binned VP: fixed 24 bins over vpLength (POC only) ---
+# --- Binned VP: 24 bins; guard j < BarNumber() so folds do not ingest NaN volume ---
 def binCount = 24;
 def hi = Highest(high, vpLength);
 def lo = Lowest(low, vpLength);
-def span = Max(hi - lo, TickSize());
-def step = span / Max(binCount - 1, 1);
+def safeTick = if !IsNaN(TickSize()) and TickSize() > 0 then TickSize() else 0.01;
+def span = Max(hi - lo, safeTick);
+def step = Max(span / Max(binCount - 1, 1), safeTick * 0.0001);
 
-def v0 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 0 then volume[j] else 0);
-def v1 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 1 then volume[j] else 0);
-def v2 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 2 then volume[j] else 0);
-def v3 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 3 then volume[j] else 0);
-def v4 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 4 then volume[j] else 0);
-def v5 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 5 then volume[j] else 0);
-def v6 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 6 then volume[j] else 0);
-def v7 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 7 then volume[j] else 0);
-def v8 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 8 then volume[j] else 0);
-def v9 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 9 then volume[j] else 0);
-def v10 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 10 then volume[j] else 0);
-def v11 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 11 then volume[j] else 0);
-def v12 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 12 then volume[j] else 0);
-def v13 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 13 then volume[j] else 0);
-def v14 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 14 then volume[j] else 0);
-def v15 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 15 then volume[j] else 0);
-def v16 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 16 then volume[j] else 0);
-def v17 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 17 then volume[j] else 0);
-def v18 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 18 then volume[j] else 0);
-def v19 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 19 then volume[j] else 0);
-def v20 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 20 then volume[j] else 0);
-def v21 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 21 then volume[j] else 0);
-def v22 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 22 then volume[j] else 0);
-def v23 = fold j = 0 to vpLength - 1 with s = 0 do s + (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 23 then volume[j] else 0);
+def v0 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 0 then volume[j] else 0) else 0);
+def v1 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 1 then volume[j] else 0) else 0);
+def v2 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 2 then volume[j] else 0) else 0);
+def v3 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 3 then volume[j] else 0) else 0);
+def v4 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 4 then volume[j] else 0) else 0);
+def v5 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 5 then volume[j] else 0) else 0);
+def v6 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 6 then volume[j] else 0) else 0);
+def v7 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 7 then volume[j] else 0) else 0);
+def v8 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 8 then volume[j] else 0) else 0);
+def v9 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 9 then volume[j] else 0) else 0);
+def v10 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 10 then volume[j] else 0) else 0);
+def v11 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 11 then volume[j] else 0) else 0);
+def v12 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 12 then volume[j] else 0) else 0);
+def v13 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 13 then volume[j] else 0) else 0);
+def v14 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 14 then volume[j] else 0) else 0);
+def v15 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 15 then volume[j] else 0) else 0);
+def v16 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 16 then volume[j] else 0) else 0);
+def v17 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 17 then volume[j] else 0) else 0);
+def v18 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 18 then volume[j] else 0) else 0);
+def v19 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 19 then volume[j] else 0) else 0);
+def v20 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 20 then volume[j] else 0) else 0);
+def v21 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 21 then volume[j] else 0) else 0);
+def v22 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 22 then volume[j] else 0) else 0);
+def v23 = fold j = 0 to vpLength - 1 with s = 0 do s + (if j < BarNumber() and step > 0 and !IsNaN(volume[j]) then (if Floor(Min(Max(((high[j] + low[j] + close[j]) / 3 - lo) / step, 0), binCount - 1)) == 23 then volume[j] else 0) else 0);
 
 def mx01 = Max(v0, v1);
 def mx23 = Max(v2, v3);
