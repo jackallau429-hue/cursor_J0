@@ -5,9 +5,11 @@
 # - Not one script for both platforms — TradingView uses the .pine file in this folder.
 # - No real order-book order flow in ToS; cumDV is a candle-direction volume proxy only.
 # - Volume profile here is a binned POC line (24 bins) over vpLength; for full profile use chart Volume Profile.
+# - VWAP: CALENDAR_DATE only starts if that calendar day exists in loaded history; otherwise use FIRST_DATA_BAR.
 
 declare upper;
 
+input vwapAnchorMode = { default FIRST_DATA_BAR, CALENDAR_DATE };
 input anchorYear = 2024;
 input anchorMonth = 1;
 input anchorDay = 2;
@@ -20,7 +22,11 @@ input showDeltaPlot = no;
 
 def ymd = anchorYear * 10000 + anchorMonth * 100 + anchorDay;
 def isAnchorDay = GetYYYYMMDD() == ymd;
-def firstAnchorBar = isAnchorDay and !isAnchorDay[1];
+def firstCalendarAnchor = isAnchorDay and !isAnchorDay[1];
+def firstBarAnchor = BarNumber() == 1;
+def firstAnchorBar =
+    if vwapAnchorMode == vwapAnchorMode.FIRST_DATA_BAR then firstBarAnchor
+    else firstCalendarAnchor;
 
 def trackFromAnchor = CompoundValue(1, if firstAnchorBar then yes else if trackFromAnchor[1] then yes else no, no);
 def sumPV = CompoundValue(1, if firstAnchorBar then hlc3 * volume else if trackFromAnchor then sumPV[1] + hlc3 * volume else 0, 0);
@@ -30,6 +36,15 @@ def avwap = if trackFromAnchor and sumV != 0 then sumPV / sumV else Double.NaN;
 plot avwapLine = avwap;
 avwapLine.SetDefaultColor(Color.ORANGE);
 avwapLine.SetLineWeight(3);
+
+AddLabel(
+    yes,
+    if vwapAnchorMode == vwapAnchorMode.FIRST_DATA_BAR then "VWAP: first loaded bar"
+    else if trackFromAnchor then "VWAP: calendar anchor OK"
+    else "VWAP: calendar day not in range — widen chart or use FIRST_DATA_BAR",
+    if vwapAnchorMode == vwapAnchorMode.CALENDAR_DATE and !trackFromAnchor then Color.RED
+    else Color.DARK_GRAY
+);
 
 # Pivots: swing at bar pivotRight (confirmed on current bar)
 def swingHighPivot = fold j = 0 to pivotRight + pivotLeft with cond = yes do
@@ -47,13 +62,15 @@ def lastPL = CompoundValue(1, if !IsNaN(pl) then pl else lastPL[1], Double.NaN);
 def bullSweep = !IsNaN(lastPL) and low < lastPL and close > lastPL and low[1] >= lastPL;
 def bearSweep = !IsNaN(lastPH) and high > lastPH and close < lastPH and high[1] <= lastPH;
 
-plot bullMark = if bullSweep and showSweepBubble then low - ATR(14) * 0.15 else Double.NaN;
-bullMark.SetPaintingStrategy(PaintingStrategy.BOOLEAN_POINTS);
+plot bullMark = if bullSweep and showSweepBubble then low - ATR(14) * 0.25 else Double.NaN;
+bullMark.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_UP);
 bullMark.SetDefaultColor(Color.CYAN);
+bullMark.SetLineWeight(3);
 
-plot bearMark = if bearSweep and showSweepBubble then high + ATR(14) * 0.15 else Double.NaN;
-bearMark.SetPaintingStrategy(PaintingStrategy.BOOLEAN_POINTS);
+plot bearMark = if bearSweep and showSweepBubble then high + ATR(14) * 0.25 else Double.NaN;
+bearMark.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_DOWN);
 bearMark.SetDefaultColor(Color.RED);
+bearMark.SetLineWeight(3);
 
 AddChartBubble(showSweepBubble and bullSweep, low, "Liq sweep", Color.CYAN, no);
 AddChartBubble(showSweepBubble and bearSweep, high, "Liq sweep", Color.RED, yes);
