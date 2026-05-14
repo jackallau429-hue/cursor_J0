@@ -1,55 +1,39 @@
-# Approximated buy/sell volume (Thinkorswim ThinkScript)
+# Volume bar: proportional red/green IN ONE COLUMN (Thinkorswim ThinkScript)
 # Studies → Create → paste → Save → add to LOWER subgraph (declare lower)
 #
-# IMPORTANT: This is NOT exchange-reported bid/ask or aggressor volume. Without Bookmap / tape,
-# ThinkScript cannot recover true buy vs sell fills. This uses a common proxy:
+# Visual: each bar is a single vertical column; bottom portion is RED (sellShare),
+# top portion is GREEN (buyShare), heights match the split (e.g. 80% red / 20% green).
+#
+# IMPORTANT: This is a CLR proxy, NOT tape / aggressor truth:
 #   buyShare  = (close - low) / (high - low)
 #   sellShare = (high - close) / (high - low)
-# so buyVol + sellVol = volume on each bar. Flat bars fall back to close vs open.
-#
-# Display modes:
-# - SPLIT_UP_DOWN: green histogram above zero (buy estimate), red below zero (sell estimate).
-# - SINGLE_BANDS: one histogram colored in bands from sell-heavy (red) to buy-heavy (green).
-# - SINGLE_CANDLE: one histogram colored by candle direction (rough, not CLR).
+# Flat bars: mild bias from close vs open. Hide built-in volume to avoid double stacks.
 
 declare lower;
 
-input displayMode = { default SPLIT_UP_DOWN, SINGLE_BANDS, SINGLE_CANDLE };
 input showFootnote = yes;
 
 def safeTick = if !IsNaN(TickSize()) and TickSize() > 0 then TickSize() else 0.01;
-def rng = Max(high - low, safeTick);
 def buyShare = if high != low then (close - low) / (high - low) else if close > open then 0.55 else if close < open then 0.45 else 0.5;
-
 def buyVol = volume * buyShare;
 def sellVol = volume - buyVol;
 
-plot BuyUp = if displayMode == displayMode.SPLIT_UP_DOWN then buyVol else Double.NaN;
-plot SellDn = if displayMode == displayMode.SPLIT_UP_DOWN then -sellVol else Double.NaN;
+# Split boundary: avoid degenerate clouds when one side is ~0
+def splitAdj =
+    if volume <= 0 then Double.NaN
+    else if sellVol <= 0 then 0
+    else if buyVol <= 0 then volume
+    else sellVol;
 
-BuyUp.SetPaintingStrategy(PaintingStrategy.HISTOGRAM);
-SellDn.SetPaintingStrategy(PaintingStrategy.HISTOGRAM);
-BuyUp.SetDefaultColor(Color.DARK_GREEN);
-SellDn.SetDefaultColor(Color.DARK_RED);
-BuyUp.SetLineWeight(3);
-SellDn.SetLineWeight(3);
+plot VolBase = if volume > 0 then 0 else Double.NaN;
+plot VolSplit = splitAdj;
+plot VolTop = if volume > 0 then volume else Double.NaN;
 
-plot VolBands = if displayMode == displayMode.SINGLE_BANDS then volume else Double.NaN;
-VolBands.SetPaintingStrategy(PaintingStrategy.HISTOGRAM);
-VolBands.SetLineWeight(3);
+VolBase.SetHiding(yes);
+VolSplit.SetHiding(yes);
+VolTop.SetHiding(yes);
 
-def pctBuy = buyShare * 100;
-VolBands.AssignValueColor(
-    if pctBuy > 65 then Color.DARK_GREEN
-    else if pctBuy > 55 then Color.GREEN
-    else if pctBuy < 35 then Color.DARK_RED
-    else if pctBuy < 45 then Color.RED
-    else Color.GRAY
-);
+AddCloud(VolBase, VolSplit, Color.DARK_RED, Color.DARK_RED);
+AddCloud(VolSplit, VolTop, Color.DARK_GREEN, Color.DARK_GREEN);
 
-plot VolCandle = if displayMode == displayMode.SINGLE_CANDLE then volume else Double.NaN;
-VolCandle.SetPaintingStrategy(PaintingStrategy.HISTOGRAM);
-VolCandle.SetLineWeight(3);
-VolCandle.AssignValueColor(if close > open then Color.UPTICK else if close < open then Color.DOWNTICK else Color.GRAY);
-
-AddLabel(showFootnote, "Vol: CLR approx (not tape)", Color.DARK_GRAY);
+AddLabel(showFootnote, "Vol: CLR in-bar split (not tape)", Color.DARK_GRAY);
