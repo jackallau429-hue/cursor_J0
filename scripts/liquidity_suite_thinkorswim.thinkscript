@@ -1,0 +1,170 @@
+# Liquidity sweep · Anchored VWAP · Volume profile POC (24 bins) · Delta proxy
+# Thinkorswim: Studies → Create → paste → Save
+#
+# If you still see nothing: (1) Study gear → ensure plots are enabled.
+# (2) Turn on "Show debug HL2" — you should see a magenta line; if not, study is not on price pane.
+#
+# Limits:
+# - Not one script for both platforms — TradingView uses the .pine file in this folder.
+# - No real order-book order flow in ToS; cumDV is a candle-direction volume proxy only.
+# - Volume profile here is a binned POC line (24 bins) over vpLength; for full profile use chart Volume Profile.
+# - VWAP: CALENDAR_DATE only starts if that calendar day exists in loaded history.
+
+declare upper;
+
+input vwapAnchorMode = { default FIRST_DATA_BAR, CALENDAR_DATE };
+input anchorYear = 2024;
+input anchorMonth = 1;
+input anchorDay = 2;
+input pivotLeft = 3;
+input pivotRight = 3;
+input showSweepBubble = yes;
+input vpLength = 120;
+input showVpPoc = yes;
+input showDeltaPlot = no;
+input showDebugHl2 = yes;
+
+def ymd = anchorYear * 10000 + anchorMonth * 100 + anchorDay;
+def isAnchorDay = GetYYYYMMDD() == ymd;
+def firstCalendarAnchor = isAnchorDay and !isAnchorDay[1];
+# First loaded bar of the series (BarNumber()==1 is unreliable on some aggregations)
+def firstBarAnchor = IsNaN(close[1]);
+
+def firstAnchorBar =
+    if vwapAnchorMode == vwapAnchorMode.FIRST_DATA_BAR then firstBarAnchor
+    else firstCalendarAnchor;
+
+def trackFromAnchor = CompoundValue(1, if firstAnchorBar then yes else if trackFromAnchor[1] then yes else no, no);
+def sumPV = CompoundValue(1, if firstAnchorBar then hlc3 * volume else if trackFromAnchor then sumPV[1] + hlc3 * volume else 0, 0);
+def sumV = CompoundValue(1, if firstAnchorBar then volume else if trackFromAnchor then sumV[1] + volume else 0, 0);
+def avwap = if trackFromAnchor and sumV != 0 then sumPV / sumV else Double.NaN;
+
+plot avwapLine = avwap;
+avwapLine.SetDefaultColor(Color.ORANGE);
+avwapLine.SetLineWeight(3);
+
+plot debugHl2 = if showDebugHl2 then hl2 else Double.NaN;
+debugHl2.SetDefaultColor(Color.MAGENTA);
+debugHl2.SetLineWeight(2);
+
+AddLabel(
+    yes,
+    if vwapAnchorMode == vwapAnchorMode.FIRST_DATA_BAR then "VWAP: first loaded bar"
+    else if trackFromAnchor then "VWAP: calendar anchor OK"
+    else "VWAP: calendar day not in range — widen chart or FIRST_DATA_BAR",
+    if vwapAnchorMode == vwapAnchorMode.CALENDAR_DATE and !trackFromAnchor then Color.RED
+    else Color.DARK_GRAY
+);
+
+# Pivots: need enough history so high[pivotRight] exists
+def pivotReady = BarNumber() > (pivotLeft + pivotRight + 2) and !IsNaN(high[pivotRight]);
+
+def swingHighPivot = pivotReady and (fold idx_ph = 0 to pivotRight + pivotLeft with acc_ph = yes do
+    acc_ph and (idx_ph == pivotRight or (!IsNaN(high[idx_ph]) and high[pivotRight] >= high[idx_ph])));
+
+def swingLowPivot = pivotReady and (fold idx_pl = 0 to pivotRight + pivotLeft with acc_pl = yes do
+    acc_pl and (idx_pl == pivotRight or (!IsNaN(low[idx_pl]) and low[pivotRight] <= low[idx_pl])));
+
+def ph = if swingHighPivot then high[pivotRight] else Double.NaN;
+def pl = if swingLowPivot then low[pivotRight] else Double.NaN;
+
+def lastPH = CompoundValue(1, if !IsNaN(ph) then ph else lastPH[1], Double.NaN);
+def lastPL = CompoundValue(1, if !IsNaN(pl) then pl else lastPL[1], Double.NaN);
+
+def bullSweep = !IsNaN(lastPL) and low < lastPL and close > lastPL and low[1] >= lastPL;
+def bearSweep = !IsNaN(lastPH) and high > lastPH and close < lastPH and high[1] <= lastPH;
+
+plot bullMark = if bullSweep and showSweepBubble then low - ATR(14) * 0.25 else Double.NaN;
+bullMark.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_UP);
+bullMark.SetDefaultColor(Color.CYAN);
+bullMark.SetLineWeight(3);
+
+plot bearMark = if bearSweep and showSweepBubble then high + ATR(14) * 0.25 else Double.NaN;
+bearMark.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_DOWN);
+bearMark.SetDefaultColor(Color.RED);
+bearMark.SetLineWeight(3);
+
+AddChartBubble(showSweepBubble and bullSweep, low, "Liq sweep", Color.CYAN, no);
+AddChartBubble(showSweepBubble and bearSweep, high, "Liq sweep", Color.RED, yes);
+
+# --- Binned VP: 24 bins; guard j < BarNumber() so folds do not ingest NaN volume ---
+def binCount = 24;
+def hi = Highest(high, vpLength);
+def lo = Lowest(low, vpLength);
+def safeTick = if !IsNaN(TickSize()) and TickSize() > 0 then TickSize() else 0.01;
+def span = Max(hi - lo, safeTick);
+def step = Max(span / Max(binCount - 1, 1), safeTick * 0.0001);
+
+def v0 = fold j_v0 = 0 to vpLength - 1 with sum_v0 = 0 do sum_v0 + (if j_v0 < BarNumber() and step > 0 and !IsNaN(volume[j_v0]) then (if Floor(Min(Max(((high[j_v0] + low[j_v0] + close[j_v0]) / 3 - lo) / step, 0), binCount - 1)) == 0 then volume[j_v0] else 0) else 0);
+def v1 = fold j_v1 = 0 to vpLength - 1 with sum_v1 = 0 do sum_v1 + (if j_v1 < BarNumber() and step > 0 and !IsNaN(volume[j_v1]) then (if Floor(Min(Max(((high[j_v1] + low[j_v1] + close[j_v1]) / 3 - lo) / step, 0), binCount - 1)) == 1 then volume[j_v1] else 0) else 0);
+def v2 = fold j_v2 = 0 to vpLength - 1 with sum_v2 = 0 do sum_v2 + (if j_v2 < BarNumber() and step > 0 and !IsNaN(volume[j_v2]) then (if Floor(Min(Max(((high[j_v2] + low[j_v2] + close[j_v2]) / 3 - lo) / step, 0), binCount - 1)) == 2 then volume[j_v2] else 0) else 0);
+def v3 = fold j_v3 = 0 to vpLength - 1 with sum_v3 = 0 do sum_v3 + (if j_v3 < BarNumber() and step > 0 and !IsNaN(volume[j_v3]) then (if Floor(Min(Max(((high[j_v3] + low[j_v3] + close[j_v3]) / 3 - lo) / step, 0), binCount - 1)) == 3 then volume[j_v3] else 0) else 0);
+def v4 = fold j_v4 = 0 to vpLength - 1 with sum_v4 = 0 do sum_v4 + (if j_v4 < BarNumber() and step > 0 and !IsNaN(volume[j_v4]) then (if Floor(Min(Max(((high[j_v4] + low[j_v4] + close[j_v4]) / 3 - lo) / step, 0), binCount - 1)) == 4 then volume[j_v4] else 0) else 0);
+def v5 = fold j_v5 = 0 to vpLength - 1 with sum_v5 = 0 do sum_v5 + (if j_v5 < BarNumber() and step > 0 and !IsNaN(volume[j_v5]) then (if Floor(Min(Max(((high[j_v5] + low[j_v5] + close[j_v5]) / 3 - lo) / step, 0), binCount - 1)) == 5 then volume[j_v5] else 0) else 0);
+def v6 = fold j_v6 = 0 to vpLength - 1 with sum_v6 = 0 do sum_v6 + (if j_v6 < BarNumber() and step > 0 and !IsNaN(volume[j_v6]) then (if Floor(Min(Max(((high[j_v6] + low[j_v6] + close[j_v6]) / 3 - lo) / step, 0), binCount - 1)) == 6 then volume[j_v6] else 0) else 0);
+def v7 = fold j_v7 = 0 to vpLength - 1 with sum_v7 = 0 do sum_v7 + (if j_v7 < BarNumber() and step > 0 and !IsNaN(volume[j_v7]) then (if Floor(Min(Max(((high[j_v7] + low[j_v7] + close[j_v7]) / 3 - lo) / step, 0), binCount - 1)) == 7 then volume[j_v7] else 0) else 0);
+def v8 = fold j_v8 = 0 to vpLength - 1 with sum_v8 = 0 do sum_v8 + (if j_v8 < BarNumber() and step > 0 and !IsNaN(volume[j_v8]) then (if Floor(Min(Max(((high[j_v8] + low[j_v8] + close[j_v8]) / 3 - lo) / step, 0), binCount - 1)) == 8 then volume[j_v8] else 0) else 0);
+def v9 = fold j_v9 = 0 to vpLength - 1 with sum_v9 = 0 do sum_v9 + (if j_v9 < BarNumber() and step > 0 and !IsNaN(volume[j_v9]) then (if Floor(Min(Max(((high[j_v9] + low[j_v9] + close[j_v9]) / 3 - lo) / step, 0), binCount - 1)) == 9 then volume[j_v9] else 0) else 0);
+def v10 = fold j_v10 = 0 to vpLength - 1 with sum_v10 = 0 do sum_v10 + (if j_v10 < BarNumber() and step > 0 and !IsNaN(volume[j_v10]) then (if Floor(Min(Max(((high[j_v10] + low[j_v10] + close[j_v10]) / 3 - lo) / step, 0), binCount - 1)) == 10 then volume[j_v10] else 0) else 0);
+def v11 = fold j_v11 = 0 to vpLength - 1 with sum_v11 = 0 do sum_v11 + (if j_v11 < BarNumber() and step > 0 and !IsNaN(volume[j_v11]) then (if Floor(Min(Max(((high[j_v11] + low[j_v11] + close[j_v11]) / 3 - lo) / step, 0), binCount - 1)) == 11 then volume[j_v11] else 0) else 0);
+def v12 = fold j_v12 = 0 to vpLength - 1 with sum_v12 = 0 do sum_v12 + (if j_v12 < BarNumber() and step > 0 and !IsNaN(volume[j_v12]) then (if Floor(Min(Max(((high[j_v12] + low[j_v12] + close[j_v12]) / 3 - lo) / step, 0), binCount - 1)) == 12 then volume[j_v12] else 0) else 0);
+def v13 = fold j_v13 = 0 to vpLength - 1 with sum_v13 = 0 do sum_v13 + (if j_v13 < BarNumber() and step > 0 and !IsNaN(volume[j_v13]) then (if Floor(Min(Max(((high[j_v13] + low[j_v13] + close[j_v13]) / 3 - lo) / step, 0), binCount - 1)) == 13 then volume[j_v13] else 0) else 0);
+def v14 = fold j_v14 = 0 to vpLength - 1 with sum_v14 = 0 do sum_v14 + (if j_v14 < BarNumber() and step > 0 and !IsNaN(volume[j_v14]) then (if Floor(Min(Max(((high[j_v14] + low[j_v14] + close[j_v14]) / 3 - lo) / step, 0), binCount - 1)) == 14 then volume[j_v14] else 0) else 0);
+def v15 = fold j_v15 = 0 to vpLength - 1 with sum_v15 = 0 do sum_v15 + (if j_v15 < BarNumber() and step > 0 and !IsNaN(volume[j_v15]) then (if Floor(Min(Max(((high[j_v15] + low[j_v15] + close[j_v15]) / 3 - lo) / step, 0), binCount - 1)) == 15 then volume[j_v15] else 0) else 0);
+def v16 = fold j_v16 = 0 to vpLength - 1 with sum_v16 = 0 do sum_v16 + (if j_v16 < BarNumber() and step > 0 and !IsNaN(volume[j_v16]) then (if Floor(Min(Max(((high[j_v16] + low[j_v16] + close[j_v16]) / 3 - lo) / step, 0), binCount - 1)) == 16 then volume[j_v16] else 0) else 0);
+def v17 = fold j_v17 = 0 to vpLength - 1 with sum_v17 = 0 do sum_v17 + (if j_v17 < BarNumber() and step > 0 and !IsNaN(volume[j_v17]) then (if Floor(Min(Max(((high[j_v17] + low[j_v17] + close[j_v17]) / 3 - lo) / step, 0), binCount - 1)) == 17 then volume[j_v17] else 0) else 0);
+def v18 = fold j_v18 = 0 to vpLength - 1 with sum_v18 = 0 do sum_v18 + (if j_v18 < BarNumber() and step > 0 and !IsNaN(volume[j_v18]) then (if Floor(Min(Max(((high[j_v18] + low[j_v18] + close[j_v18]) / 3 - lo) / step, 0), binCount - 1)) == 18 then volume[j_v18] else 0) else 0);
+def v19 = fold j_v19 = 0 to vpLength - 1 with sum_v19 = 0 do sum_v19 + (if j_v19 < BarNumber() and step > 0 and !IsNaN(volume[j_v19]) then (if Floor(Min(Max(((high[j_v19] + low[j_v19] + close[j_v19]) / 3 - lo) / step, 0), binCount - 1)) == 19 then volume[j_v19] else 0) else 0);
+def v20 = fold j_v20 = 0 to vpLength - 1 with sum_v20 = 0 do sum_v20 + (if j_v20 < BarNumber() and step > 0 and !IsNaN(volume[j_v20]) then (if Floor(Min(Max(((high[j_v20] + low[j_v20] + close[j_v20]) / 3 - lo) / step, 0), binCount - 1)) == 20 then volume[j_v20] else 0) else 0);
+def v21 = fold j_v21 = 0 to vpLength - 1 with sum_v21 = 0 do sum_v21 + (if j_v21 < BarNumber() and step > 0 and !IsNaN(volume[j_v21]) then (if Floor(Min(Max(((high[j_v21] + low[j_v21] + close[j_v21]) / 3 - lo) / step, 0), binCount - 1)) == 21 then volume[j_v21] else 0) else 0);
+def v22 = fold j_v22 = 0 to vpLength - 1 with sum_v22 = 0 do sum_v22 + (if j_v22 < BarNumber() and step > 0 and !IsNaN(volume[j_v22]) then (if Floor(Min(Max(((high[j_v22] + low[j_v22] + close[j_v22]) / 3 - lo) / step, 0), binCount - 1)) == 22 then volume[j_v22] else 0) else 0);
+def v23 = fold j_v23 = 0 to vpLength - 1 with sum_v23 = 0 do sum_v23 + (if j_v23 < BarNumber() and step > 0 and !IsNaN(volume[j_v23]) then (if Floor(Min(Max(((high[j_v23] + low[j_v23] + close[j_v23]) / 3 - lo) / step, 0), binCount - 1)) == 23 then volume[j_v23] else 0) else 0);
+
+def mx01 = Max(v0, v1);
+def mx23 = Max(v2, v3);
+def mx45 = Max(v4, v5);
+def mx67 = Max(v6, v7);
+def mx89 = Max(v8, v9);
+def mx1011 = Max(v10, v11);
+def mx1213 = Max(v12, v13);
+def mx1415 = Max(v14, v15);
+def mx1617 = Max(v16, v17);
+def mx1819 = Max(v18, v19);
+def mx2021 = Max(v20, v21);
+def mx2223 = Max(v22, v23);
+
+def mx0123 = Max(mx01, mx23);
+def mx4567 = Max(mx45, mx67);
+def mx891011 = Max(mx89, mx1011);
+def mx12131415 = Max(mx1213, mx1415);
+def mx16171819 = Max(mx1617, mx1819);
+def mx20212223 = Max(mx2021, mx2223);
+
+def mx07 = Max(mx0123, mx4567);
+def mx815 = Max(mx891011, mx12131415);
+def mx1623 = Max(mx16171819, mx20212223);
+
+def mxAll = Max(Max(mx07, mx815), mx1623);
+
+def pocBin =
+    if v0 == mxAll then 0 else if v1 == mxAll then 1 else if v2 == mxAll then 2 else if v3 == mxAll then 3
+    else if v4 == mxAll then 4 else if v5 == mxAll then 5 else if v6 == mxAll then 6 else if v7 == mxAll then 7
+    else if v8 == mxAll then 8 else if v9 == mxAll then 9 else if v10 == mxAll then 10 else if v11 == mxAll then 11
+    else if v12 == mxAll then 12 else if v13 == mxAll then 13 else if v14 == mxAll then 14 else if v15 == mxAll then 15
+    else if v16 == mxAll then 16 else if v17 == mxAll then 17 else if v18 == mxAll then 18 else if v19 == mxAll then 19
+    else if v20 == mxAll then 20 else if v21 == mxAll then 21 else if v22 == mxAll then 22 else 23;
+
+def totalVP = v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15 + v16 + v17 + v18 + v19 + v20 + v21 + v22 + v23;
+def pocPrice = lo + (pocBin + 0.5) * step;
+
+plot pocLine = if showVpPoc and totalVP > 0 then pocPrice else Double.NaN;
+pocLine.SetDefaultColor(Color.YELLOW);
+pocLine.SetLineWeight(2);
+
+# Session delta proxy (calendar day reset)
+def newDay = GetDay() != GetDay()[1];
+def barDV = if close > open then volume else if close < open then -volume else 0;
+def cumDV = CompoundValue(1, if newDay then barDV else cumDV[1] + barDV, 0);
+
+plot deltaProxy = if showDeltaPlot then cumDV else Double.NaN;
+deltaProxy.SetDefaultColor(Color.GRAY);
