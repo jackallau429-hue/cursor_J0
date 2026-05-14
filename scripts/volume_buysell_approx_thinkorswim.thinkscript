@@ -1,10 +1,13 @@
-# Volume bar: proportional red/green IN ONE COLUMN (Thinkorswim ThinkScript)
+# Volume bar: proportional red/green INSIDE each histogram column (Thinkorswim ThinkScript)
 # Studies → Create → paste → Save → add to LOWER subgraph (declare lower)
 #
-# Visual: each bar is a single vertical column; bottom portion is RED (sellShare),
-# top portion is GREEN (buyShare), heights match the split (e.g. 80% red / 20% green).
+# Why not AddCloud: AddCloud fills BETWEEN bars, so it looks like a continuous "mountain".
+# This version uses two HISTOGRAM plots per bar:
+#   1) Plot full height in GREEN (buy+sell total)
+#   2) Plot SELL portion in RED on top — red covers the bottom of the column, leaving GREEN visible
+#      only from sellVol..volume (top buy-share slice). Result: discrete vertical bars.
 #
-# IMPORTANT: This is a CLR proxy, NOT tape / aggressor truth:
+# IMPORTANT: CLR proxy, NOT tape / aggressor truth:
 #   buyShare  = (close - low) / (high - low)
 #   sellShare = (high - close) / (high - low)
 # Flat bars: mild bias from close vs open. Hide built-in volume to avoid double stacks.
@@ -13,27 +16,20 @@ declare lower;
 
 input showFootnote = yes;
 
-def safeTick = if !IsNaN(TickSize()) and TickSize() > 0 then TickSize() else 0.01;
 def buyShare = if high != low then (close - low) / (high - low) else if close > open then 0.55 else if close < open then 0.45 else 0.5;
 def buyVol = volume * buyShare;
 def sellVol = volume - buyVol;
 
-# Split boundary: avoid degenerate clouds when one side is ~0
-def splitAdj =
-    if volume <= 0 then Double.NaN
-    else if sellVol <= 0 then 0
-    else if buyVol <= 0 then volume
-    else sellVol;
+# Background column (full height) = green "buy+remaining" paint; must be declared FIRST.
+plot VolGreen = if volume > 0 then volume else Double.NaN;
+VolGreen.SetPaintingStrategy(PaintingStrategy.HISTOGRAM);
+VolGreen.SetDefaultColor(Color.DARK_GREEN);
+VolGreen.SetLineWeight(5);
 
-plot VolBase = if volume > 0 then 0 else Double.NaN;
-plot VolSplit = splitAdj;
-plot VolTop = if volume > 0 then volume else Double.NaN;
+# Foreground column (bottom overlay) = red sell estimate; declared SECOND so it draws on top.
+plot VolRed = if volume > 0 then sellVol else Double.NaN;
+VolRed.SetPaintingStrategy(PaintingStrategy.HISTOGRAM);
+VolRed.SetDefaultColor(Color.DARK_RED);
+VolRed.SetLineWeight(5);
 
-VolBase.SetHiding(yes);
-VolSplit.SetHiding(yes);
-VolTop.SetHiding(yes);
-
-AddCloud(VolBase, VolSplit, Color.DARK_RED, Color.DARK_RED);
-AddCloud(VolSplit, VolTop, Color.DARK_GREEN, Color.DARK_GREEN);
-
-AddLabel(showFootnote, "Vol: CLR in-bar split (not tape)", Color.DARK_GRAY);
+AddLabel(showFootnote, "Vol: CLR stacked histogram (not tape)", Color.DARK_GRAY);
